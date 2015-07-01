@@ -23,11 +23,13 @@ class DomainTask(object):
         self.mainList = {}
         self.mainLabels = []
         self.mainMatchInfo = {}
+        self.mainPortToQueueId = {}
 
         self.backupPath = False
         self.backupList = {}
         self.backupLabesl = []
         self.backupMatchInfo = {}
+        self.backupPortToQueueId = {}
         self.backupmod = None
 
         self.bandwidth = {}
@@ -168,6 +170,23 @@ class DomainTask(object):
 
         return len(self.getSwitchList(pathType))
 
+    def setMainPortToQueueId(self, switch, portNo, queueId):
+        assert switch not in self.MainPortToQueueId
+        self.mainPortToQueueId[switch] = (portNo, queueId)
+
+    def setBackupPortToQueueId(self, switch, portNo, queueId):
+        assert  switch not in self.backupPortToQueueId
+        self.backupPortToQueueId[switch] = (portNo, queueId)
+
+    def getMainPortToQueueId(self, switch):
+        assert switch in self.mainPortToQueueId
+        item = self.mainPortToQueueId[switch]
+        return item[0], item[1]
+
+    def getBackupPortToQueueId(self, switch):
+        assert  switch in self.backupPortToQueueId
+        item = self.mainPortToQueueId[switch]
+        return item[0], item[1]
 
 class TaskList(dict):
 
@@ -180,7 +199,7 @@ class TaskList(dict):
             raise ValueError('No task in this domain')
 
         if taskId in self:
-            taskInstance =  self[taskId]
+            taskInstance = self[taskId]
         else:
             msg = 'task %d non_exist' % taskId
             raise ValueError

@@ -134,6 +134,12 @@ class QueueQos(object):
 
         return rest
 
+    def setQueueInUse(self, portNo, queueId):
+        assert portNo in self.queueInfo
+        queuePort = self.queueInfo[portNo]
+        queueInfo = queuePort[queueId]
+        queueInfo.changeIntoInUse()
+
 
 class QueuePort(object):
 

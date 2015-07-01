@@ -125,11 +125,3 @@ class TopoInfo(object):
     def isNodeIn(self, node):
         return node in self.nodes()
 
-
-
-
-
-
-
-
-

@@ -94,8 +94,9 @@ class DomainReplyController(object):
 
                     pushLabel = labels[index]
 
-                    # match, mod = DC.pushMplsFlow(i, pushLabel, srcIp, dstIp, outPortNo, queueId, pathType)
-                    match, mod = DC.pushMplsFlow(i, pushLabel, srcIp, dstIp, outPortNo, 1, pathType)
+                    match, mod = DC.pushMplsFlow(i, pushLabel, srcIp, dstIp, outPortNo, queueId, pathType)
+                    queueQoSInstance.setQueueInUse(outPortNo, queueId)
+                    # match, mod = DC.pushMplsFlow(i, pushLabel, srcIp, dstIp, outPortNo, 1, pathType)
                     if pathType == 'backup':
                         taskInstance.setBackupMod(mod)
 
@@ -123,8 +124,9 @@ class DomainReplyController(object):
                         return
 
                     popLabel = labels[-1]
-                    match, mod = DC.popMplsFlow(i, popLabel, outPortNo, 1)
-                    # match, mod = DC.popMplsFlow(i, popLabel, outPortNo, queueId)
+                    # match, mod = DC.popMplsFlow(i, popLabel, outPortNo, 1)
+                    match, mod = DC.popMplsFlow(i, popLabel, outPortNo, queueId)
+                    queueQoSInstance.setQueueInUse(outPortNo, queueId)
 
                 else:
                     nextSwitch = switchList[index + 1]
@@ -147,13 +149,17 @@ class DomainReplyController(object):
                     pushLabel = labels[index]
                     popLabel = labels[index - 1]
 
-                    # match, mod =DC.swapMplsFlow(i, pushLabel, popLabel, outPortNo, queueId)
-                    match, mod =DC.swapMplsFlow(i, pushLabel, popLabel, outPortNo, 1)
+                    match, mod =DC.swapMplsFlow(i, pushLabel, popLabel, outPortNo, queueId)
+                    # match, mod =DC.swapMplsFlow(i, pushLabel, popLabel, outPortNo, 1)
+                    queueQoSInstance.setQueueInUse(outPortNo, queueId)
+
 
                 if pathType == 'main':
                     taskInstance.addMainMatchInfo(i, match)
+                    taskInstance.setMainPortToQueueId(i, outPortNo, queueId)
                 elif pathType == 'backup':
                     taskInstance.addBackupMatchInfo(i, match)
+                    taskInstance.setBackupPortToQueueId(i, outPortNo, queueId)
 
         else:
             i = switchList[0]
@@ -179,12 +185,15 @@ class DomainReplyController(object):
                 self.logger.debug(msg)
                 return
 
-            # match, mod = DC.noMplsFlow(i, srcIp, dstIp, outPortNo, queueId, pathType)
-            match, mod = DC.noMplsFlow(i, srcIp, dstIp, outPortNo, 1, pathType)
+            match, mod = DC.noMplsFlow(i, srcIp, dstIp, outPortNo, queueId, pathType)
+            # match, mod = DC.noMplsFlow(i, srcIp, dstIp, outPortNo, 1, pathType)
+            queueQoSInstance.setQueueInUse(outPortNo, queueId)
             if pathType == 'main':
                 taskInstance.addMainMatchInfo(i, match)
+                taskInstance.setMainPortToQueueId(i, outPortNo, queueId)
             elif pathType == 'backup':
                 taskInstance.addBackupMatchInfo(i, match)
+                taskInstance.setBackupPortToQueueId(i, outPortNo, queueId)
 
 
         DC.sendTaskAssignReply(taskId, pathType)
@@ -267,6 +276,7 @@ class DomainReplyController(object):
                 datapath  =DC._get_datapath(switch)
                 newMatch = self._get_new_match(datapath, matchInfo)
                 DC.remove_flow(datapath, newMatch)
+
 
         if backup_:
             backupList = taskInstance.getSwitchList('backup')
