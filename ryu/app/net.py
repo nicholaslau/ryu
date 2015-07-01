@@ -55,7 +55,7 @@ def getBackupPathEffect(edge):
 class Task(object):
 
     def __init__(self, taskid, name=None, srcSwitch=None, dstSwitch=None, srcIp=None,
-                 dstIp=None,*args, **kwargs):
+                 dstIp=None, *args, **kwargs):
 
         self.taskId = taskid
 
@@ -84,6 +84,8 @@ class Task(object):
         self.backupPathSect = {}
         self.backupMpls = {}
         self.backupUnconfirmedDomain = []
+
+        self.deleteDomains = []
 
         self.status = False
 
@@ -131,8 +133,19 @@ class Task(object):
     def getBandwidth(self):
         return self.bandwidth
 
+    def setDeleteDomains(self, deleteList):
+        self.deleteDomains = deleteList
 
+    def getDeleteDomains(self):
+        return self.deleteDomains
 
+    def removeDeleteDomain(self, domainID):
+        self.deleteDomains.remove(domainID)
+
+    def isCheckToDelete(self):
+        if not self.deleteDomains:
+            return True
+        return  False
 
     def taskSetFields(self, srcSwitch=None, dstSwitch=None, srcIp=None, dstIp=None, bandwidth=None):
         self.srcSwitch = srcSwitch
@@ -312,6 +325,15 @@ class Task(object):
         sendMessage = json.dumps(to_send)
         return sendMessage
 
+    def makeTaskDeleteMsg(self, domainId):
+        to_send = {}
+        to_send[TYPE] = 'taskDelete'
+        to_send[DOMAINID] = domainId
+        to_send[TASK_ID] = self.taskId
+
+        send_message = json.dumps(to_send)
+        return send_message
+
     def addMainUnconfirmDomain(self, dominaId):
         self.mainUnconfirmedDomain.append(dominaId)
 
@@ -369,6 +391,23 @@ class Task(object):
         self.completPathBackup = []
         self.backupPathSect = {}
         self.crossDomainMain = []
+
+
+    def getAllDomains(self):
+        newList = self.crossDomainMain
+        for i in self.crossDomainBackup:
+            if i not in newList:
+                newList.append(i)
+
+        return newList
+
+    def getAllMpls(self):
+        labels = self.mainMpls
+        for i in self.backupMpls:
+            if i not in labels:
+                labels.append(i)
+
+        return labels
 
 
 

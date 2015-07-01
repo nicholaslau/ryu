@@ -33,6 +33,7 @@ from ryu.app.domain_reply_controller import DomainReplyController
 
 from ryu.app.domainTopo import DomainTopo
 from ryu.app.switch_features import SwtichFeatures, PortFeatures
+from ryu.app.queue_qos import QueueQos
 
 from ryu.app.domain_task import TaskList
 
@@ -63,6 +64,7 @@ DOMAINWSGIPORT = 'domainWsgiPort'
 
 LOG = logging.getLogger(__name__)
 
+DEFAULTOVSDBADDR = '6640'
 
 # CONF = cfg.CONF
 #
@@ -108,6 +110,7 @@ class DomainController(app_manager.RyuApp):
 
         self.deviceInfo = {}
 
+        self.QoS_dict = {}
         self.superExist = self.CONF.super_exist
         if self.superExist:
             self.superWsgiIp = self.CONF.super_wsgi_ip
@@ -128,6 +131,10 @@ class DomainController(app_manager.RyuApp):
         data[DomainReplyController] = DomainReplyController()
         wsgi.register(DomainWsgiController, data)
 
+    def _get_QueueQos(self, dpid):
+        assert dpid in self.QoS_dict
+        return self.QoS_dict[dpid]
+
     def _get_datapath(self, dpid):
         assert dpid in self.dps
         return self.dps[dpid]
@@ -143,6 +150,15 @@ class DomainController(app_manager.RyuApp):
         switch = self.deviceInfo.setdefault(dpid, SwtichFeatures(dpid))
 
         switch.initFieds(msg.version, msg.capabilities, msg.n_buffers, msg.n_tables, msg.auxiliary_id)
+
+        if dpid not in self.QoS_dict:
+            queueQoSInstance = QueueQos(datapath, self.CONF)
+            self.QoS_dict[dpid] = queueQoSInstance
+            ip = datapath.address[0]
+            ovs_addr = 'tcp:' + ip + ':' + DEFAULTOVSDBADDR
+            queueQoSInstance.set_ovsdb_addr(dpid, ovs_addr)
+            self.logger.info("QueueQoS Entering. dpid: %0x16, addr: %s" % (dpid, ovs_addr))
+
 
 
     @set_ev_cls(ofp_event.EventOFPPortDescStatsReply, CONFIG_DISPATCHER)
@@ -527,7 +543,7 @@ class DomainController(app_manager.RyuApp):
 
 
     def sendTaskAssignReply(self, taskId, pathType):
-        print 'sendTaskReply'
+        self.logger.info("send Task Assign Reply")
         send_message = self._make_task_assign_reply(taskId, pathType)
         command = self._to_commad(send_message)
         self.send_no_return_command(command)
@@ -538,6 +554,21 @@ class DomainController(app_manager.RyuApp):
         to_send[TYPE] = 'taskAssignReply'
         to_send[TASK_ID] = taskId
         to_send[PATHTYPE] = pathType
+
+        send_message = json.dumps(to_send)
+        return send_message
+
+    def sendTaskDeleteReply(self, taskId):
+        self.logger.info("send Task Delete Reply")
+        send_message = self._make_task_delete_reply(taskId)
+        command = self._to_commad(send_message)
+        self.send_no_return_command(command)
+
+    def _make_task_delete_reply(self, taskId):
+        to_send = {}
+        to_send[DOMAINID] = self.domainId
+        to_send[TYPE] = 'taskDeleteReply'
+        to_send[TASK_ID] = taskId
 
         send_message = json.dumps(to_send)
         return send_message

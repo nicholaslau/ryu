@@ -3,7 +3,7 @@ __author__ = 'root'
 import  logging
 import time
 from ryu.app.domainInfo import DomainInfo, SwitchInfo, PortInfo
-from ryu.app.net import TASK_DICT, getTask, getBackupPathEffect, getMainPathEffect
+from ryu.app.net import TASK_DICT, getTask, getBackupPathEffect, getMainPathEffect, assertTaskInDict, Task, delTask
 
 DOMAINID = 'domainId'
 DPID = 'dpid'
@@ -233,24 +233,31 @@ class SuperReplyController(object):
             self.logger.info("Task %d Established" % taskId)
 
     #####  dai xiugai
-    def TaskAssignReply(self, jsonMsg, supercontroller):
+    def taskAssignReply(self, jsonMsg, SC):
 
-        assert jsonMsg[TYPE] == 'TaskDeleteReply'
+        assert jsonMsg[TYPE] == 'taskDeleteReply'
 
         taskId = jsonMsg[TASK_ID]
 
-        task_delete_info = supercontroller.task_delete_info
-        try:
-            unconfirm_domain_list = task_delete_info[taskId]
-        except:
-            self.logger.debug("receive a task delete reply for a task not assign")
+        if not assertTaskInDict(taskId):
+            self.logger.info("No such task")
             return
 
-        domianId = jsonMsg[DOMAINID]
-        if domianId in unconfirm_domain_list:
-            unconfirm_domain_list.remove(domianId)
+        taskInstance = getTask(taskId)
+        taskInstance = Task(1)
 
-        if not unconfirm_domain_list:
-            task_info_dict = supercontroller.task_info_dict
-            if taskId in task_info_dict:
-                del task_info_dict[taskId]
+        domainId = jsonMsg[DOMAINID]
+
+        allDeleteDomians = taskInstance.getDeleteDomains()
+
+        assert domainId in allDeleteDomians
+
+        taskInstance.removeDeleteDomain(domainId)
+
+        if taskInstance.isCheckToDelete():
+            allLabels = taskInstance.getAllMpls()
+            SC.LabelsPool.recycleLabels(allLabels)
+
+            delTask(taskId)
+            self.logger.info("Task %d deleted" % taskId)
+

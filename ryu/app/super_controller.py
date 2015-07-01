@@ -18,6 +18,7 @@ from ryu.base import app_manager
 from ryu.app.net import TASK_DICT, delTask, assertTaskInDict, getTask, registerTask
 
 from ryu.app.super_reply_controller import SuperReplyController
+from ryu.lib import hub
 
 
 SUPERCONTROLLER = 'SuperController'
@@ -113,8 +114,6 @@ class SuperController(app_manager.RyuApp):
         send_message = json.dumps(to_send)
         return send_message
 
-
-    ##dai xiu gai
     def setNewBackupPath(self, taskId):
         taskInstance = getTask(taskId)
         completePathMain = taskInstance.getMainCompletePath()
@@ -124,14 +123,13 @@ class SuperController(app_manager.RyuApp):
 
         srcSwitch = taskInstance.getSrcSwtich()
         dstSwtich = taskInstance.getDstSwitch()
-        srcIp = taskInstance.getSrcIp()
-        dstIp = taskInstance.getDstIp()
+
         if self.trafficBalance:
             newCompletePathBackup = newTopo.getWeightPath(srcSwitch, dstSwtich)
         else:
-            newCompletePathBackup = newTopo.getShortestPath(srcSwitch, dstSwitch)
+            newCompletePathBackup = newTopo.getShortestPath(srcSwitch, dstSwtich)
 
-        if not  newCompletePathBackup:
+        if not newCompletePathBackup:
             self.logger.warning("can not assign a new backupPath for this task ")
             return
 
@@ -144,18 +142,34 @@ class SuperController(app_manager.RyuApp):
         self.LabelsPool.recycleLabels(noUseLabels)
 
         for i in newBackupSectorialPath:
-            send_message = taskInstance.makeDoaminTaskAssign(i,  type= 'backup')
+            send_message = taskInstance.makeDoaminTaskAssign(i,  type='backup')
             command = self._to_commad(send_message)
             print 'newbackup: ', command
             self.send_no_return_command(command)
             taskInstance.addBackupUnconfirmDomain(i)
 
 
+    def _keep_alive(self):
+        while True:
+            for i in self.domains:
+                self.sendKeepAlive(i)
+                self.logger.info("send keepalive to domain %d" % i)
+            hub.sleep(10)
+
+    def sendKeepAlive(self, i):
+        send_message = self._make_keep_alive(i)
+        command = self._to_commad(send_message)
+        self.send_no_return_command(command)
 
 
+    def _make_keep_alive(self, i):
+        to_send = {}
+        to_send[TYPE] = 'keepAlive'
+        to_send[DOMAINID] = i
 
+        send_message = json.dumps(to_send)
+        return send_message
 
-    #############
 
     def send_no_return_command(self, command):
         try:
@@ -336,28 +350,28 @@ class SuperWsgiController(ControllerBase):
             taskInstance.addBackupUnconfirmDomain(j)
 
 
-    #####  dai  xiu gai
     @route('super', SUPERBASEURL + '/task/delete', methods=['PUT'], requirements=None)
     def taskDelete(self, req):
-        SC = self.SuperController
 
+        SC = self.SuperController
         rest = eval(req)
 
-        try:
-            taskId = rest[TASK_ID]
-        except:
-            self.logger.debug("No task marked as taskId")
-            return
+        taskId = rest[TASK_ID]
+        if not assertTaskInDict(taskId):
+            self.logger.info("no task %d" % taskId)
+            return Response(status=200, body='No task %d\n' % taskId)
 
-        task_info = SC.task_info_dict[taskId]
-        domainList = task_info['sectorial_path'].keys()
+        taskInstance = getTask(taskId)
+        allCrossDomains = taskInstance.getAllDomains()
+        taskInstance.setDeleteDomains(allCrossDomains)
+        for i in allCrossDomains:
+            send_message = taskInstance.makeTaskDeleteMsg(i)
+            command =SC._to_commad(send_message)
+            SC.send_no_return_command(command)
 
-        for i in domainList:
-            send_message = SC.make_task_delete_message(domainid=i, task_id=taskId)
-            command = SC._to_commad(send_message)
 
-            SuperController.send_no_return_command(command)
 
-        SC.task_del_info[taskId] = domainList
+
+
 
 

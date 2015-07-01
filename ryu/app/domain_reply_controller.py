@@ -36,7 +36,7 @@ class DomainReplyController(object):
         else:
             self.logger = logging.getLogger(self.name)
 
-        self.logger.info("I am reply controller")
+        self.logger.info("I am Domain reply controller")
 
     def taskAssign(self, jsonMsg, DC):
 
@@ -80,18 +80,18 @@ class DomainReplyController(object):
                     switchInfo = DEVICEINFO[i]
                     outPortName = switchInfo.getPortName(outPortNo)
 
-                    # queueId = DC.get_queueid(i, outPortName, maxRate, minRate)
-                    # if queueId == -1:
-                    #     self.logger.info("No more queue")
-                    #     return
-                    #
-                    # rest = self.make_queue_rest(i, outPortName, maxRate, minRate, queueId)
-                    #
-                    # ovs_bridge = DC.QOS_dict[i]
-                    # status, msg = ovs_bridge.set_queue(rest)
-                    # if status:
-                    #     self.logger.debug(msg)
-                    #     return
+                    queueQoSInstance = DC._get_QueueQos(i)
+                    queueId = queueQoSInstance.getQueueId(outPortNo, maxRate, minRate)
+                    if not queueId:
+                        self.logger.info("No More queue on port: %d, switch: %0x16" % (outPortNo, i))
+                        return
+
+                    rest = queueQoSInstance.makeQueueRest(outPortName, maxRate, minRate, queueId)
+                    status, msg = queueQoSInstance.set_queue(rest)
+                    if status:
+                        self.logger.debug(msg)
+                        return
+
                     pushLabel = labels[index]
 
                     # match, mod = DC.pushMplsFlow(i, pushLabel, srcIp, dstIp, outPortNo, queueId, pathType)
@@ -110,18 +110,17 @@ class DomainReplyController(object):
                     switchInfo = DEVICEINFO[i]
                     outPortName = switchInfo.getPortName(outPortNo)
 
-                    # queueId = DC.get_queueid(i, outPortName, maxRate, minRate)
-                    # if queueId == -1:
-                    #     self.logger.info("No more queue")
-                    #     return
-                    #
-                    # rest = self.make_queue_rest(i, outPortName, maxRate, minRate, queueId)
-                    #
-                    # ovs_bridge = DC.QOS_dict[i]
-                    # status, msg = ovs_bridge.set_queue(rest)
-                    # if status:
-                    #     self.logger.debug(msg)
-                    #     return
+                    queueQoSInstance = DC._get_QueueQos(i)
+                    queueId = queueQoSInstance.getQueueId(outPortNo, maxRate, minRate)
+                    if not queueId:
+                        self.logger.info("No More queue on port: %d, switch: %0x16" % (outPortNo, i))
+                        return
+
+                    rest = queueQoSInstance.makeQueueRest(outPortName, maxRate, minRate, queueId)
+                    status, msg = queueQoSInstance.set_queue(rest)
+                    if status:
+                        self.logger.debug(msg)
+                        return
 
                     popLabel = labels[-1]
                     match, mod = DC.popMplsFlow(i, popLabel, outPortNo, 1)
@@ -133,18 +132,17 @@ class DomainReplyController(object):
                     switchInfo = DEVICEINFO[i]
                     outPortName = switchInfo.getPortName(outPortNo)
 
-                    # queueId = DC.get_queueid(i, outPortName, maxRate, minRate)
-                    # if queueId == -1:
-                    #     self.logger.info("No more queue")
-                    #     return
-                    #
-                    # rest = self.make_queue_rest(i, outPortName, maxRate, minRate, queueId)
-                    #
-                    # ovs_bridge = DC.QOS_dict[i]
-                    # status, msg = ovs_bridge.set_queue(rest)
-                    # if status:
-                    #     self.logger.debug(msg)
-                    #     return
+                    queueQoSInstance = DC._get_QueueQos(i)
+                    queueId = queueQoSInstance.getQueueId(outPortNo, maxRate, minRate)
+                    if not queueId:
+                        self.logger.info("No More queue on port: %d, switch: %0x16" % (outPortNo, i))
+                        return
+
+                    rest = queueQoSInstance.makeQueueRest(outPortName, maxRate, minRate, queueId)
+                    status, msg = queueQoSInstance.set_queue(rest)
+                    if status:
+                        self.logger.debug(msg)
+                        return
 
                     pushLabel = labels[index]
                     popLabel = labels[index - 1]
@@ -166,21 +164,20 @@ class DomainReplyController(object):
                 # raise ValueError("can not find out port, I think you should input a specify port no")
                 outPortNo = 6
 
-            # switchInfo = DEVICEINFO[i]
-            # outPortName = switchInfo.getPortName(outPortNo)
-            #
-            # queueId = DC.get_queueid(i, outPortName, maxRate, minRate)
-            # if queueId == -1:
-            #     self.logger.info("No more queue")
-            #     return
-            #
-            # rest = self.make_queue_rest(i, outPortName, maxRate, minRate, queueId)
-            #
-            # ovs_bridge = DC.QOS_dict[i]
-            # status, msg = ovs_bridge.set_queue(rest)
-            # if status:
-            #     self.logger.debug(msg)
-            #     return
+            switchInfo = DEVICEINFO[i]
+            outPortName = switchInfo.getPortName(outPortNo)
+
+            queueQoSInstance = DC._get_QueueQos(i)
+            queueId = queueQoSInstance.getQueueId(outPortNo, maxRate, minRate)
+            if not queueId:
+                self.logger.info("No More queue on port: %d, switch: %0x16" % (outPortNo, i))
+                return
+
+            rest = queueQoSInstance.makeQueueRest(outPortName, maxRate, minRate, queueId)
+            status, msg = queueQoSInstance.set_queue(rest)
+            if status:
+                self.logger.debug(msg)
+                return
 
             # match, mod = DC.noMplsFlow(i, srcIp, dstIp, outPortNo, queueId, pathType)
             match, mod = DC.noMplsFlow(i, srcIp, dstIp, outPortNo, 1, pathType)
@@ -250,4 +247,40 @@ class DomainReplyController(object):
         newMatch = datapath.ofproto_parser.OFPMatch()
         newMatch._fields2 = match._fields2
         return newMatch
+
+    def taskDelete(self, jsonMsg, DC):
+        assert jsonMsg[TYPE] == 'taskDelete'
+
+        taskId = jsonMsg[TASK_ID]
+        assert taskId in DC.TASK_LIST
+
+        taskInstance = DC.TASK_LIST[taskId]
+        taskInstance = DomainTask(1)
+
+        main_ = taskInstance.mainPath
+        backup_ = taskInstance.backupPath
+
+        if main_:
+            mainList = taskInstance.getSwitchList('main')
+            for switch in mainList:
+                matchInfo = taskInstance.getMainMatchInfo(switch)
+                datapath  =DC._get_datapath(switch)
+                newMatch = self._get_new_match(datapath, matchInfo)
+                DC.remove_flow(datapath, newMatch)
+
+        if backup_:
+            backupList = taskInstance.getSwitchList('backup')
+            for switch in backupList:
+                matchInfo = taskInstance.getBackupMatchInfo(switch)
+                datapath = DC._get_datapath(switch)
+                newMatch = self._get_new_match(datapath, matchInfo)
+                DC.remove_flow(datapath, newMatch)
+
+
+        DC.sendTaskDeleteReply(taskId)
+
+
+
+
+
 
