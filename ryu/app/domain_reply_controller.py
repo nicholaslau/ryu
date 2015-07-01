@@ -2,33 +2,28 @@ __author__ = 'root'
 
 from ryu.cfg import CONF
 import logging
-import time
-import json
-TYPE = 'Type'
-DOMAINID = 'DomainID'
+import  time
 
-REST_SRC_SWITCH = 'src_switch'
-REST_DST_SWITCH = 'dst_switch'
-REST_MID_SWITCH = 'mid_switch'
-REST_TASK_ID =  'task_id'
-REST_BANDWITH = 'bandwidth'
-REST_DURATION = 'duration'
-REST_DST_IP = 'nw_dst'
-REST_SRC_IP = 'nw_src'
+# from ryu.app.domain_controller import DomainController
 
+from ryu.app.domain_task import DomainTask, TaskList
 
-REST_PORT_NAME = 'port_name'
-REST_QUEUE_TYPE = 'type'
-REST_QUEUE_MAX_RATE = 'max_rate'
-REST_QUEUE_MIN_RATE = 'min_rate'
-REST_QUEUE_ID = 'qos_id'
-REST_PARENT_MAX_RATE = 'parent_max_queue'
+DOMAINID = 'domainId'
+TYPE = 'type'
+PATHTYPE = 'pathType'
+TASK_ID = 'taskId'
+SRC_IP = 'srcIp'
+DST_IP = 'dstIp'
+SRC_SWITCH = 'srcSwitch'
+DST_SWITCH = 'dstSwitch'
+BANDWIDTH = 'bandwidth'
+PARTPATH = 'path'
+LABELS = 'labels'
+DOMAINWSGIIP = 'domainWsgiIp'
+DOMAINWSGIPORT = 'domainWsgiPort'
 
-QUEUEINUSETYPE = 'inUse'
-QUEUEINUSE = 'yes'
-QUEUENOTINUSE = 'no'
-MAXRATE = 'max_rate'
-MINRATE = 'min_rate'
+SINGLESWITCH = 1
+
 
 class DomainReplyController(object):
 
@@ -43,270 +38,216 @@ class DomainReplyController(object):
 
         self.logger.info("I am reply controller")
 
-    def TaskDelete(self, jsonMsg, domaincontroller):
+    def taskAssign(self, jsonMsg, DC):
 
-        assert jsonMsg[TYPE] == 'TaskDelete'
+        assert jsonMsg[TYPE] == 'taskAssign'
+        # DC = DomainController
+        print jsonMsg
 
+        taskId = jsonMsg[TASK_ID]
+        TASK_LIST = DC.TASK_LIST
+        taskInstance = TASK_LIST.setdefault(taskId, DomainTask(taskId))
+        # taskInstance = DomainTask(taskId)
+        pathType = jsonMsg[PATHTYPE]
+        srcSwitch = jsonMsg[SRC_SWITCH]
+        dstSwitch = jsonMsg[DST_SWITCH]
+        srcIp = jsonMsg[SRC_IP]
+        dstIp = jsonMsg[DST_IP]
+        bandwidth = jsonMsg[BANDWIDTH]
+        pathInfo = jsonMsg[PARTPATH]
+        labels = jsonMsg[LABELS]
 
-    def TaskAssign(self, jsonMsg, domaincontroller):
-        DC = domaincontroller
+        taskInstance.setFields(srcSwitch=srcSwitch, dstSwitch=dstSwitch, srcIp=srcIp, dstIp=dstIp,
+                               bandwidth=bandwidth, path=pathInfo, labels=labels, pathType=pathType)
 
-        assert jsonMsg[TYPE] == 'TaskAssign'
-        task_id = jsonMsg[REST_TASK_ID]
-        task_info = DC.task_info.setdefault(task_id, {})
-        task_type = jsonMsg['main']
-        bandwidth = jsonMsg[REST_BANDWITH]
-        srcIp = jsonMsg[REST_SRC_IP]
-        dstIp = jsonMsg[REST_DST_IP]
-        duration = jsonMsg[REST_DURATION]
-        pathInfo = jsonMsg['path']
-        switch_list = pathInfo['list']
-        preswitch = pathInfo['pre']
-        postswitch = pathInfo['post']
-        max_rate = bandwidth['peak']
-        min_rate = bandwidth['guranteed']
-        lables = pathInfo['labels']
+        preSwitch = taskInstance.getPreSwitch(pathType)
+        postSwitch = taskInstance.getPostSwitch(pathType)
+        switchList = taskInstance.getSwitchList(pathType)
+        length =taskInstance.getSwithListLength(pathType)
 
-        match_info = task_info.setdefault('match', {})
-        main_match_info = match_info.setdefault('main', {})
-        backup_match_info = match_info.setdefault('backup', {})
+        maxRate = taskInstance.getMaxRate()
+        minRate = taskInstance.getMinRate()
 
+        domainTopo = DC.topo
+        DEVICEINFO = DC.deviceInfo
 
-        port_pair = DC.port_pair
-        device_info = DC.device_info
-
-        length = len(switch_list)
-        if length > 1:
-
-            for i in switch_list:
-                index = switch_list.index(i)
+        if length is not SINGLESWITCH:
+            for i in switchList:
+                index = switchList.index(i)
                 if index == 0:
-                    next_switch = switch_list[index + 1]
-                    for pair in port_pair:
-                        if pair[0] == i and port_pair[pair][0] == next_switch:
-                            out_port = pair
-                            break
-                    out_port_no = out_port[1]
-                    out_port_name = device_info[i]['ports'][out_port_no]['name']
+                    nextSwitch = switchList[index + 1]
+                    outPortNo = domainTopo.getLinkOutPort(i, nextSwitch)
+                    switchInfo = DEVICEINFO[i]
+                    outPortName = switchInfo.getPortName(outPortNo)
 
-                    queueId = DC.get_queueid(i, out_port_no, max_rate, min_rate)
-                    if queueId == -1:
-                        self.logger.info("No more queue")
-                        return
+                    # queueId = DC.get_queueid(i, outPortName, maxRate, minRate)
+                    # if queueId == -1:
+                    #     self.logger.info("No more queue")
+                    #     return
+                    #
+                    # rest = self.make_queue_rest(i, outPortName, maxRate, minRate, queueId)
+                    #
+                    # ovs_bridge = DC.QOS_dict[i]
+                    # status, msg = ovs_bridge.set_queue(rest)
+                    # if status:
+                    #     self.logger.debug(msg)
+                    #     return
+                    pushLabel = labels[index]
 
-                    rest = self.make_queue_rest(out_port_name, max_rate, min_rate, queueId)
+                    # match, mod = DC.pushMplsFlow(i, pushLabel, srcIp, dstIp, outPortNo, queueId, pathType)
+                    match, mod = DC.pushMplsFlow(i, pushLabel, srcIp, dstIp, outPortNo, 1, pathType)
+                    if pathType == 'backup':
+                        taskInstance.setBackupMod(mod)
 
-                    ovs_bridge = DC.QOS_dict[i]
-                    status, msg = ovs_bridge.set_queue(rest)
-                    if status:
-                        self.logger.debug(msg)
-                        return
 
-                    push_lable = lables[index]
-                    if task_type == 'main':
-                        match = DC.push_mpls_flow(i, push_lable, srcIp, dstIp, out_port_no, queueId, duration)
-                    elif task_type == 'backup' and preswitch == 0:
-                        match, mod = DC.get_flow_mod(i, push_lable, srcIp, dstIp, out_port_no, queueId, duration)
-                        task_backup_mod = DC.task_back.setdefault(task_id, {})
-                        task_backup_mod['mod'] = mod
-
-                elif index == len(switch_list) - 1:
-                    next_switch = postswitch
-                    if next_switch != 0:
-                        for pair in port_pair:
-                            if pair[0] == i and port_pair[pair][0] == next_switch:
-                                out_port = pair
-                                break
-                        out_port_no = out_port[1]
+                elif index == length - 1:
+                    nextSwitch = postSwitch
+                    if nextSwitch != 0:
+                        outPortNo = domainTopo.getLinkOutPort(i, nextSwitch)
                     else:
-                        out_port_no = 2
+                        # raise ValueError("can not find out port, I think you should input a specify port no")
+                        outPortNo = 6
+                    switchInfo = DEVICEINFO[i]
+                    outPortName = switchInfo.getPortName(outPortNo)
 
-                    out_port_name = device_info[i]['ports'][out_port_no]['name']
-                    queueId = DC.get_queueid(i, out_port_no, max_rate, min_rate)
-                    if queueId == -1:
-                        self.logger.info("no more queue")
-                        return
+                    # queueId = DC.get_queueid(i, outPortName, maxRate, minRate)
+                    # if queueId == -1:
+                    #     self.logger.info("No more queue")
+                    #     return
+                    #
+                    # rest = self.make_queue_rest(i, outPortName, maxRate, minRate, queueId)
+                    #
+                    # ovs_bridge = DC.QOS_dict[i]
+                    # status, msg = ovs_bridge.set_queue(rest)
+                    # if status:
+                    #     self.logger.debug(msg)
+                    #     return
 
-                    rest = self.make_queue_rest(out_port_name, max_rate, min_rate, queueId)
+                    popLabel = labels[-1]
+                    match, mod = DC.popMplsFlow(i, popLabel, outPortNo, 1)
+                    # match, mod = DC.popMplsFlow(i, popLabel, outPortNo, queueId)
 
-                    ovs_bridge = DC.QOS_dict[i]
-                    status, msg = ovs_bridge.set_queue(rest)
-                    if status:
-                        self.logger.debug(msg)
-                        return
-                    pop_lable = lables[-1]
-                    match = DC.pop_mpls_flow(i, pop_lable, out_port_no, 0, duration)
                 else:
-                    next_switch = switch_list[index + 1]
-                    for pair in port_pair:
-                        if pair[0] == i and port_pair[pair][0] == next_switch:
-                            out_port = pair
-                            break
-                    out_port_no = out_port[1]
-                    out_port_name = device_info[i]['ports'][out_port_no]['name']
-                    queueId = DC.get_queueid(i, out_port_no, max_rate, min_rate)
-                    if queueId == -1:
-                        self.logger.info('no more queue')
-                        return
-                    rest = self.make_queue_rest(out_port_name, max_rate, min_rate, queueId)
-                    ovs_bridge = DC.QOS_dict[i]
-                    status, msg = ovs_bridge.set_queue(rest)
-                    if status:
-                        self.logger.debug(msg)
-                        return
-                    pop_lable = lables[index - 1]
-                    push_lable = lables[index]
+                    nextSwitch = switchList[index + 1]
+                    outPortNo = domainTopo.getLinkOutPort(i, nextSwitch)
+                    switchInfo = DEVICEINFO[i]
+                    outPortName = switchInfo.getPortName(outPortNo)
 
-                    match = DC.swap_mpls_flow(i, pop_lable, push_lable, out_port_no, queueId, duration)
-            # match_info[i] = {'match': match, 'port_no': out_port_no, 'queue_id': queueId}
-                if task_type == 'main':
-                    info =main_match_info.setdefault(i, {})
-                elif task_type == 'backup':
-                    info = backup_match_info.setdefault(i, {})
-                info['match'] = match
-                info['port_no'] = out_port_no
-                info['queue_id'] = queueId
+                    # queueId = DC.get_queueid(i, outPortName, maxRate, minRate)
+                    # if queueId == -1:
+                    #     self.logger.info("No more queue")
+                    #     return
+                    #
+                    # rest = self.make_queue_rest(i, outPortName, maxRate, minRate, queueId)
+                    #
+                    # ovs_bridge = DC.QOS_dict[i]
+                    # status, msg = ovs_bridge.set_queue(rest)
+                    # if status:
+                    #     self.logger.debug(msg)
+                    #     return
 
-                DC.queue_info[i][out_port_no][queueId][QUEUEINUSETYPE] = QUEUEINUSE
+                    pushLabel = labels[index]
+                    popLabel = labels[index - 1]
 
-            # match_info_per_switch = match_info.setdefault(i, {})
-            # match_info_per_switch['match'] = match
-            # match_info_per_switch['port_no'] = out_port_no
-            # match_info_per_switch['queue_id'] = queueId
-        elif length == 1:
-            i = switch_list[0]
-            next_switch = postswitch
-            if next_switch != 0:
-                for pair in port_pair:
-                    if pair[0] == i and port_pair[pair][0] == next_switch:
-                        out_port = pair
-                        break
-                out_port_no = out_port[1]
+                    # match, mod =DC.swapMplsFlow(i, pushLabel, popLabel, outPortNo, queueId)
+                    match, mod =DC.swapMplsFlow(i, pushLabel, popLabel, outPortNo, 1)
+
+                if pathType == 'main':
+                    taskInstance.addMainMatchInfo(i, match)
+                elif pathType == 'backup':
+                    taskInstance.addBackupMatchInfo(i, match)
+
+        else:
+            i = switchList[0]
+            nextSwitch = postSwitch
+            if nextSwitch != 0:
+                outPortNo = domainTopo.getLinkOutPort(i, nextSwitch)
             else:
-                out_port_no = 2
+                # raise ValueError("can not find out port, I think you should input a specify port no")
+                outPortNo = 6
 
-            out_port_no = out_port[1]
-            out_port_name = device_info[i]['ports'][out_port_no]['name']
+            # switchInfo = DEVICEINFO[i]
+            # outPortName = switchInfo.getPortName(outPortNo)
+            #
+            # queueId = DC.get_queueid(i, outPortName, maxRate, minRate)
+            # if queueId == -1:
+            #     self.logger.info("No more queue")
+            #     return
+            #
+            # rest = self.make_queue_rest(i, outPortName, maxRate, minRate, queueId)
+            #
+            # ovs_bridge = DC.QOS_dict[i]
+            # status, msg = ovs_bridge.set_queue(rest)
+            # if status:
+            #     self.logger.debug(msg)
+            #     return
 
-            queueId = DC.get_queueid(i, out_port_no, max_rate, min_rate)
-            if queueId == -1:
-                self.logger.info("No more queue")
-                return
-
-            rest = self.make_queue_rest(out_port_name, max_rate, min_rate, queueId)
-
-            ovs_bridge = DC.QOS_dict[i]
-            status, msg = ovs_bridge.set_queue(rest)
-            if status:
-                self.logger.debug(msg)
-                return
-
-            if task_type == 'main':
-                match = DC.no_mpls_hanlder(i, srcIp, dstIp, out_port_no, queueId, duration)
-            elif task_type == 'backup' and preswitch == 0:
-                match, mod = DC.no_mpls_get_mod(i, srcIp, dstIp, out_port_no, queueId, duration)
-                task_backup_mod = DC.task_back.setdefault(task_id, {})
-                task_backup_mod['mod'] = mod
-            if task_type == 'main':
-                info =main_match_info.setdefault(i, {})
-            elif task_type == 'backup':
-                info = backup_match_info.setdefault(i, {})
-            info['match'] = match
-            info['port_no'] = out_port_no
-            info['queue_id'] = queueId
-
-            DC.queue_info[i][out_port_no][queueId][QUEUEINUSETYPE] = QUEUEINUSE
+            # match, mod = DC.noMplsFlow(i, srcIp, dstIp, outPortNo, queueId, pathType)
+            match, mod = DC.noMplsFlow(i, srcIp, dstIp, outPortNo, 1, pathType)
+            if pathType == 'main':
+                taskInstance.addMainMatchInfo(i, match)
+            elif pathType == 'backup':
+                taskInstance.addBackupMatchInfo(i, match)
 
 
+        DC.sendTaskAssignReply(taskId, pathType)
+
+    def startBackup(self, jsonMsg, DC):
+
+        assert jsonMsg[TYPE] == 'startBackup'
+        assert jsonMsg[DOMAINID] == DC.domainId
+        taskId = jsonMsg[TASK_ID]
+        taskInstance = DC.TASK_LIST[taskId]
+        # taskInstance = DomainTask(taskId)
+
+        main_ = taskInstance.mainPath
+        backup_ = taskInstance.backupPath
+
+        if main_:
+            mainList = taskInstance.getSwitchList('main')
+            if backup_:
+                backupList = taskInstance.getSwitchList('backup')
+                if mainList[0] == backupList[0]:
+                    switch = backupList[0]
+                    mod = taskInstance.getBackupMod()
+                    datapath = DC._get_datapath(switch)
+                    datapath.send_msg(mod)
+                    for i in range(1, len(mainList)):
+                        switch = mainList[i]
+                        match = taskInstance.getMainMatchInfo(switch)
+                        datapath = DC._get_datapath(switch)
+                        newMatch = self._get_new_match(datapath, match)
+                        DC.remove_flow(datapath, newMatch)
+                    taskInstance.changeBackupToMain()
+                else:
+                    mod = taskInstance.getBackupMod()
+                    switch =backupList[0]
+                    datapath = DC._get_datapath(switch)
+                    datapath.send_msg(mod)
+                    for switch in mainList:
+                        match = taskInstance.getMainMatchInfo(switch)
+                        datapath = DC._get_datapath(switch)
+                        newMatch = self._get_new_match(datapath, match)
+                        DC.remove_flow(datapath, newMatch)
+                    taskInstance.changeBackupToMain()
+            else:
+                for switch in mainList:
+                    match = taskInstance.getMainMatchInfo(switch)
+                    datapath = DC._get_datapath(switch)
+                    newMatch = self._get_new_match(datapath, match)
+                    DC.remove_flow(datapath, newMatch)
+
+                del DC.TASK_LIST[taskId]
 
 
-        to_send = {}
-        to_send[DOMAINID] = DC.domain_id
-        to_send[REST_TASK_ID] = task_id
-        to_send[TYPE] = 'TaskAssignReply'
-        to_send['main'] = task_type
+        elif backup_:
+            mod = taskInstance.getBackupMod()
+            datapath = DC._get_datapath(taskInstance.getSwitchList('backup')[0])
+            datapath.send_msg(mod)
+            taskInstance.changeBackupToMain()
 
-
-        send_message = json.dumps(to_send)
-        commamd = DC._to_commad(send_message)
-        self.logger.info('send task reply')
-        DC.send_no_return_command(commamd)
-
-
-    def StartBackupHanlder(self, jsonMsg, domaincontroller):
-
-        DC = domaincontroller
-
-        assert jsonMsg[TYPE] == 'StartBackupHanlder'
-        assert jsonMsg[DOMAINID] == DC.domain_id
-        task_id = jsonMsg[REST_TASK_ID]
-        src_switch = jsonMsg[REST_SRC_SWITCH]
-        task_back = DC.task_back[task_id]
-        mod = task_back['mod']
-        datapath = mod.datapath
-
-        datapath.send_msg(mod)
-
-        queue_info = DC.queue_info
-
-        task_info_main = DC.task_info[task_id]['match']['main']
-        switch_list = task_info_main.keys()
-        for i in switch_list:
-            info = task_info_main[i]
-            port_no = info['port_no']
-            queue_id = info['queue_id']
-            queue_info[i][port_no][queue_id][QUEUEINUSETYPE] = QUEUENOTINUSE
-            if i is not src_switch:
-                datapath = DC.dps[i]
-                match = info['match']
-                new_match = datapath.ofproto_parser.OFPMatch()
-                new_match._fields2 = match._fields2
-                DC.remove_flow(datapath, new_match)
-
-        task_info_main = DC.task_info[task_id]['match']['backup']
-        DC.task_info[task_id]['backup'] = {}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def make_queue_rest(self, port_name, max_rate, min_rate, queue_id, parent_max_rate=10000000):
-        rest = {}
-        rest[REST_PORT_NAME] = port_name
-        rest[REST_PARENT_MAX_RATE] = parent_max_rate
-        rest[REST_QUEUE_MAX_RATE] = max_rate
-        rest[REST_QUEUE_MIN_RATE] = min_rate
-        rest[REST_QUEUE_ID] = queue_id
-
-        return rest
-
-    def KeepAlive(self, jsonMsg, domaincontroller):
-
-        assert jsonMsg[TYPE] == 'KeepAlive'
-
-        domainId = jsonMsg[DOMAINID]
-
-        if domainId is not domaincontroller.domain_id:
-            self.logger.debug("receive a keepalive in wrong way")
-            return
-
-        domaincontroller.super_last_echo = time.time()
-
-
-
-
-
-
-
-
-
+    def _get_new_match(self, datapath, match):
+        newMatch = datapath.ofproto_parser.OFPMatch()
+        newMatch._fields2 = match._fields2
+        return newMatch
 

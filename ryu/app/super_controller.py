@@ -5,46 +5,44 @@ import json
 import logging
 import time
 import os
-import random
-import copy
+
+from ryu.app.net import Task
+from ryu.app.topo import TopoInfo
+from ryu.app.labelsManager import MplsLabelsPool
+from ryu.app.domainInfo import DomainInfo, SwitchInfo
 
 from webob import Response
 from ryu.app.wsgi import ControllerBase, WSGIApplication
 from ryu.app.wsgi import route
-
 from ryu.base import app_manager
+from ryu.app.net import TASK_DICT, delTask, assertTaskInDict, getTask, registerTask
 
 from ryu.app.super_reply_controller import SuperReplyController
 
-super_instance = 'super_controller_instance'
-super_reply_controller_instance = 'super_reply_controller_instance'
 
-super_url_base = '/super'
+SUPERCONTROLLER = 'SuperController'
+SUPERREPLYCONTROLLER = 'SuperReplyController'
 
-domain_url_no_reutrn = '/domain/noreturn'
-domain_url_reutrn = '/domain/return'
+SUPERBASEURL = '/super'
+DOMAINURLNORETURN= '/domain/noreturn'
+DOMAINURLRETURN = '/domain/return'
 
-TYPE = 'Type'
 
+DOMAINID = 'domainId'
+TYPE = 'type'
+PATHTYPE = 'pathType'
+TASK_ID = 'taskId'
+SRC_IP = 'srcIp'
+DST_IP = 'dstIp'
+SRC_SWITCH = 'srcSwitch'
+DST_SWITCH = 'dstSwitch'
+BANDWIDTH = 'bandwidth'
+PARTPATH = 'path'
+LABELS = 'labels'
 DOMAINWSGIIP = 'domainWsgiIp'
 DOMAINWSGIPORT = 'domainWsgiPort'
 
 
-REST_TRAFFIC_ID = 'id'
-REST_SRC_SWITCH = 'src_switch'
-REST_DST_SWITCH = 'dst_switch'
-REST_MID_SWITCH = 'mid_switch'
-REST_TASK_ID =  'task_id'
-REST_BANDWITH = 'bandwidth'
-REST_DURATION = 'duration'
-REST_DST_IP = 'nw_dst'
-REST_SRC_IP = 'nw_src'
-
-TASKSTATUS = 'task_status'
-ESTABLISHED = 'established'
-UNCONFIRMED = 'unconfirmed'
-
-DOMAINID = 'DomainID'
 
 class SuperController(app_manager.RyuApp):
 
@@ -53,42 +51,112 @@ class SuperController(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super(SuperController, self).__init__(*args, **kwargs)
 
-        self.all_topo = nx.DiGraph()
-        self.all_topo_weight = nx.DiGraph()
-        self.switch_domains = {}    # domainid  <----> switchlist
-        self.link_domains = {}
-        self.domain_wsgi_info = {1:{'domainWsgiIp':'10.108.90.200','domainWsgiPort':8080}}  # domainid  <----->   domain wsig info {'ip':"xxxxx", 'prot':1111}
+        self.wsgiIp = None
+        self.wsgiPort = None
+        ##################################################
+        self.topo = TopoInfo()
+        self.trafficBalance = True
+        ##################################################
+        self.LabelsPool = MplsLabelsPool()
+        self.LabelsPool.initPool()
+        ##################################################
+        self.domains = {}
 
-
-        self.traffic_balance = False
-        self.dpidToDomainID = {}   # dpid <------->   domainId
-        self.task_info_dict = {}
-        self.task_delete_info = {}
-        self.label_list = self.genMPLSLableLib()
-
-        self.last_collect= {}
-
+        ###################################################
         wsgi = kwargs['wsgi']
-        wsgi.register(SuperWsgiController, {super_instance: self, super_reply_controller_instance: SuperReplyController()})
+        data = {}
+        data[SUPERCONTROLLER] = self
+        data[SUPERREPLYCONTROLLER] = SuperReplyController()
+        wsgi.register(SuperWsgiController, data)
 
 
-    # def _to_commad(self, send_message, returnType=False):
-    #
-    #     command = 'curl -X '
-    #     if returnType:
-    #         command += 'GET -d \''
-    #     else:
-    #         command += 'PUT -d \''
-    #     command += send_message
-    #     command += '\' http://'
-    #     command += self.super_wsgi_ip
-    #     command += ':'
-    #     command += str(self.super_wsgi_port)
-    #     command += super_url_no_reutrn
-    #
-    #     return command
+    def startBackupHandler(self, taskId):
+        taskInstance = getTask(taskId)
+        backupPathDomains = taskInstance.getBackupCrossDomains()
+        if not backupPathDomains:
+            self.logger.info('NO Backup Path for this Task')
+            return
 
-    # @staticmethod
+        mainPathDomains = taskInstance.getMainCrossDomains()
+
+        handlerDomains = self._add_diff_from_list(backupPathDomains, mainPathDomains)
+
+        for domainId in handlerDomains:
+            self.sendStartBackupPathMsg(domainId, taskId)
+
+        taskInstance.changeBackupToMain()
+
+    def _add_diff_from_list(self, list1, list2):
+        list_ = []
+        for i in list1:
+            list_.append(i)
+
+        for j in list2:
+            if j not in list_:
+                list_.append(j)
+
+        return list_
+
+    def sendStartBackupPathMsg(self, domainId, taskId):
+        send_message = self._make_start_backup_msg(domainId, taskId)
+        command = self._to_commad(send_message)
+        print "start backup: ", command
+        self.send_no_return_command(command)
+
+    def _make_start_backup_msg(self, domainId, taskId):
+
+        to_send = {}
+        to_send[TYPE] = 'startBackup'
+        to_send[DOMAINID] = domainId
+        to_send[TASK_ID] = taskId
+
+        send_message = json.dumps(to_send)
+        return send_message
+
+
+    ##dai xiu gai
+    def setNewBackupPath(self, taskId):
+        taskInstance = getTask(taskId)
+        completePathMain = taskInstance.getMainCompletePath()
+        assert len(completePathMain) > 1  # to make sure we set a backupPath for a task having a mainPath
+        mainEdges = taskInstance.getMainEdges()
+        newTopo = self.topo.getNewTopoExceptSE(mainEdges)
+
+        srcSwitch = taskInstance.getSrcSwtich()
+        dstSwtich = taskInstance.getDstSwitch()
+        srcIp = taskInstance.getSrcIp()
+        dstIp = taskInstance.getDstIp()
+        if self.trafficBalance:
+            newCompletePathBackup = newTopo.getWeightPath(srcSwitch, dstSwtich)
+        else:
+            newCompletePathBackup = newTopo.getShortestPath(srcSwitch, dstSwitch)
+
+        if not  newCompletePathBackup:
+            self.logger.warning("can not assign a new backupPath for this task ")
+            return
+
+        taskInstance.setBackupCompletePath(newCompletePathBackup)
+        nodeToDomain = self.topo.nodeToDomainId
+        newBackupSectorialPath = taskInstance.getBackupSectorialPath(nodeToDomain)
+
+        newAllBackupPathMpls = self.LabelsPool.getLabels(len(newCompletePathBackup))
+        noUseLabels = taskInstance.assignBackuPathMpls(newAllBackupPathMpls)
+        self.LabelsPool.recycleLabels(noUseLabels)
+
+        for i in newBackupSectorialPath:
+            send_message = taskInstance.makeDoaminTaskAssign(i,  type= 'backup')
+            command = self._to_commad(send_message)
+            print 'newbackup: ', command
+            self.send_no_return_command(command)
+            taskInstance.addBackupUnconfirmDomain(i)
+
+
+
+
+
+
+    #############
+
     def send_no_return_command(self, command):
         try:
             os.popen2(command)
@@ -96,40 +164,13 @@ class SuperController(app_manager.RyuApp):
             self.logger.debug('command exceute fail.Fail Command: %s' % command)
             return
 
-
-    def make_task_assign_message(self, domainid, task_id, src_ip, dst_ip, bandwidth, duration, path_info, type):
-        to_send = {}
-        to_send[DOMAINID] = domainid
-        to_send[TYPE] = 'TaskAssign'
-        to_send['main'] = type
-        to_send[REST_TASK_ID] = task_id
-        to_send[REST_SRC_IP] = src_ip
-        to_send[REST_DST_IP] = dst_ip
-        to_send[REST_BANDWITH] = bandwidth
-        to_send[REST_DURATION] = duration
-        to_send['path'] = path_info
-
-        send_message = json.dumps(to_send)
-
-        return send_message
-
-    def make_task_delete_message(self, domainid, task_id):
-        to_send = {}
-        to_send[DOMAINID] = domainid
-        to_send[TYPE] = 'TaskDelete'
-        to_send[REST_TASK_ID] =  task_id
-
-        send_message = json.dumps(to_send)
-
-        return send_message
-
     def _to_commad(self, send_message, returnType=False):
 
-        domainId = eval(send_message)[DOMAINID]
-        domain_wsgi_info = self.domain_wsgi_info.get(domainId, None)
-        domain_wsgi_ip = domain_wsgi_info[DOMAINWSGIIP]
-
-        domain_wsgi_port = domain_wsgi_info[DOMAINWSGIPORT]
+        message = eval(send_message)
+        domainId = message.get(DOMAINID)
+        domainInstance = self.domains.get(domainId)
+        domainWsgiIp = domainInstance.getWsgiIp()
+        domainWsgiPort = domainInstance.getWsgiPort()
 
         command = 'curl -X '
         if returnType:
@@ -138,27 +179,17 @@ class SuperController(app_manager.RyuApp):
             command += 'PUT -d \''
         command += send_message
         command += '\' http://'
-        command += domain_wsgi_ip
+        command += domainWsgiIp
         command += ':'
-        command += str(domain_wsgi_port)
+        command += str(domainWsgiPort)
         if not returnType:
-            command += domain_url_no_reutrn
+            command += DOMAINURLNORETURN
         else:
-            command += domain_url_reutrn
+            command += DOMAINURLRETURN
+
+        command += ' 2> /dev/null'
 
         return command
-
-    def genMPLSLableLib(self):
-        min = 1
-        max = 65536
-        num = 1000
-        result = []
-        while len(result) <= num:
-            item = random.randint(min, max + 1)
-            if item not in result:
-                result.append(item)
-
-        return result
 
 
 class SuperWsgiController(ControllerBase):
@@ -166,33 +197,38 @@ class SuperWsgiController(ControllerBase):
     def __init__(self, req, link, data, **config):
         super(SuperWsgiController, self).__init__(req, link, data, **config)
         self.name = 'SuperWsgiController'
-        self.SuperController = data[super_instance]
-        self.super_reply_controller = data[super_reply_controller_instance]
+        self.SuperController = data[SUPERCONTROLLER]
+        self.SuperReplyController = data[SUPERREPLYCONTROLLER]
 
         if hasattr(self.__class__, 'LOGGER_NAME'):
             self.logger = logging.getLogger(self.__class__.LOGGER_NAME)
         else:
             self.logger = logging.getLogger(self.name)
 
-    @route('super', super_url_base + '/noreturn', methods=['PUT'], requirements=None)
+    @route('super', SUPERBASEURL + '/noreturn', methods=['PUT'], requirements=None)
     def noreturned_command_handler(self, req):
         msgbody = eval(req.body)
-        type = msgbody[TYPE]
+        assert TYPE in msgbody
+        type = msgbody.get(TYPE, None)
+        if not type:
+            self.logger.fatal("Not type in msgbody")
+            return
 
         try:
-            func = getattr(self.super_reply_controller, type)
+            func = getattr(self.SuperReplyController, type)
         except:
-            self.logger.fatal('no such type')
+            self.logger.fatal('can not find handler')
+            return
 
         func(msgbody, self.SuperController)
 
-    @route('super', super_url_base + '/return', methods=['PUT'], requirements=None)
+    @route('super', SUPERBASEURL + '/return', methods=['PUT'], requirements=None)
     def returned_command_handler(self, req):
         msgbody = eval(req.body)
-        try:
-            type = msgbody[TYPE]
-        except Exception, e:
-            self.logger.error("bad commands")
+        assert TYPE in msgbody
+        type = msgbody.get(TYPE, None)
+        if not type:
+            self.logger.fatal("Not type in msgbody")
             return
 
         try:
@@ -204,114 +240,111 @@ class SuperWsgiController(ControllerBase):
         func(msgbody, self.SuperController)
 
 
-    @route('super', super_url_base + '/task/assign', methods=['PUT'], requirements=None)
+    @route('super', SUPERBASEURL + '/task/assign', methods=['PUT'], requirements=None)
     def taskAssign(self, req):
 
         SC = self.SuperController
-        rest = eval(req.body)
-        taskId = rest.get(REST_TASK_ID, None)
+        body = req.body
+        rest = eval(body)
+        taskId = rest[TASK_ID]
+
         if not taskId:
             return Response(status=200, body="Input a task Id\n")
-        task_info_dict = SC.task_info_dict
-        if taskId in task_info_dict:
-            status = task_info_dict[taskId].get(TASKSTATUS, None)
-            if  status and status == ESTABLISHED:
-                return Response(status=200, body="taskId duplicated!\n")
-
-        task_info = task_info_dict.setdefault(taskId, {})
-
-        src_switch = rest[REST_SRC_SWITCH]
-        dst_switch = rest[REST_DST_SWITCH]
-        bandwith = rest[REST_BANDWITH]
-        duration = rest[REST_DURATION]
-        dstIp = rest[REST_DST_IP]
-        srcIp = rest[REST_SRC_IP]
-
-        if SC.traffic_balance:
-            try:
-                main_switch_list = nx.dijkstra_path(SC.all_topo_wight, src_switch, dst_switch)
-            except:
-                self.logger("no path between switch %d and %d" % (src_switch, dst_switch))
-                del task_info_dict[taskId]
-                return Response(status=200, body="no path between switch %d and %d\n" % (src_switch, dst_switch))
-            main_edges = self.get_edges_from_switchlist(main_switch_list)
-            temp_topo = self.get_topo_for_backup(SC.all_topo_wight, main_edges)
-
-            try:
-                backup_switch_list = nx.dijkstra_path(temp_topo, src_switch, dst_switch)
-            except:
-                self.logger.info("no backup path between switch %d and %d" % (src_switch, dst_switch))
-                backup_switch_list = []
+        if assertTaskInDict(taskId):
+            taskInstance = getTask(taskId)
         else:
-            try:
-                main_switch_list = nx.shortest_path(SC.all_topo, src_switch, dst_switch)
-            except:
-                self.logger.info("no path between switch %d and %d" % (src_switch, dst_switch))
-                del task_info_dict[taskId]
-                return Response(status=200, body="no path between switch %d and %d\n" % (src_switch, dst_switch))
-            main_edges = self.get_edges_from_switchlist(main_switch_list)
-            temp_topo = self.get_topo_for_backup(SC.all_topo, main_edges)
+            taskInstance = Task(taskId)
 
-            try:
-                backup_switch_list = nx.shortest_path(temp_topo, src_switch, dst_switch)
-            except:
-                self.logger.info("no backup path between switch %d and %d" % (src_switch, dst_switch))
-                backup_switch_list = []
+        if taskInstance.isEstablished():
 
-        main_path_info = task_info.setdefault('main', {})
-        main_path_info['complete_path'] = main_switch_list
-        main_sectorial_path = self.get_sectorial_path(main_switch_list, SC.dpidToDomainID)
-        main_sectorial_path_with_labels = self.assign_mpls_lable(main_sectorial_path, SC.label_list)
+            return Response(status=200, body="taskId duplicated!\n")
 
-        backup_path_info = task_info.setdefault('backup', {})
-        backup_path_info['complete_path'] = backup_switch_list
-        backup_sectorial_path = self.get_sectorial_path(backup_path_info, SC.dpidToDomainID)
-        backup_sectorial_path_with_labels = self.assign_mpls_lable(backup_sectorial_path, SC.dpidToDomainID)
+        srcSwitch = rest[SRC_SWITCH]
+        dstSwitch = rest[DST_SWITCH]
+        bandwith = rest[BANDWIDTH]
+        # duration = rest[]
+        dstIp = rest[DST_IP]
+        srcIp = rest[SRC_IP]
+        taskInstance.taskSetFields(srcSwitch=srcSwitch, dstSwitch=dstSwitch, srcIp=srcIp, dstIp=dstIp, bandwidth=bandwith)
 
-        for i in main_sectorial_path_with_labels:
-            path_info = main_sectorial_path_with_labels[i]
-            send_message = SC.make_task_assign_message(domainid=i, task_id=taskId, src_ip=srcIp, dst_ip=dstIp,
-                                                       bandwidth=bandwith, duration=duration,
-                                                       path_info=path_info, type='main')
+
+        if SC.trafficBalance:
+            completePathMain = SC.topo.getWeightPath(srcSwitch, dstSwitch)
+            if not completePathMain:
+                self.logger.warning("no main path between switch %d and %d" % (srcSwitch, dstSwitch))
+                return Response(status=200, body="no main path between switch %d and %d\n" % (srcSwitch, dstSwitch))
+
+            taskInstance.setMainCompletePath(completePathMain)
+            mainEdges = taskInstance.getMainEdges()
+            newTopo = SC.topo.getNewTopoExceptSE(mainEdges)
+            completePathBackup = newTopo.getWeightPath(srcSwitch, dstSwitch)
+            if not completePathBackup:
+                self.logger.warning("no backup path between switch %d and %d" % (srcSwitch, dstSwitch))
+
+            taskInstance.setBackupCompletePath(completePathBackup)
+        else:
+            completePathMath = SC.topo.getShortestPath(srcSwitch, dstSwitch)
+            if not completePathMath:
+                self.logger.warning("no main path between switch %d and %d" % (srcSwitch, dstSwitch))
+                return Response(status=200, body="no main path between switch %d and %d\n" % (srcSwitch, dstSwitch))
+
+            taskInstance.setMainCompletePath(completePathMath)
+            mainEdges = taskInstance.getMainEdges()
+            newTopo = SC.topo.getNewTopoExceptSE(mainEdges)
+            completePathBackup = newTopo.getShorestPath(srcSwitch, dstSwitch)
+            if not completePathBackup:
+                self.logger.warning("no backup path between switch %d and %d" % (srcSwitch, dstSwitch))
+
+            taskInstance.setBackupCompletePath(completePathBackup)
+
+        nodeToDomian = SC.topo.nodeToDomainId
+        mainSectorialPath = taskInstance.getMainSectorialPath(nodeToDomian)
+        backupSectorialPath = taskInstance.getBackupSectorialPath(nodeToDomian)
+        # print mainSectorialPath
+        # print backupSectorialPath
+
+
+        allMainPathMpls = SC.LabelsPool.getLabels(len(completePathMain))
+        noUseLabels = taskInstance.assignMainPathMpls(allMainPathMpls)
+        SC.LabelsPool.recycleLabels(noUseLabels)
+
+        allBackupPathMpls = SC.LabelsPool.getLabels(len(completePathBackup))
+        noUseLabels = taskInstance.assignBackuPathMpls(allBackupPathMpls)
+        SC.LabelsPool.recycleLabels(noUseLabels)
+
+        registerTask(taskInstance)
+        # print "main: ", completePathMain
+        # print "backup: ", completePathBackup
+        # print "nodeToDomain: ", nodeToDomian
+
+        for i in mainSectorialPath:
+            send_message = taskInstance.makeDoaminTaskAssign(i)
+
             command = SC._to_commad(send_message)
-            SC.send_no_return_command(command=command)
-
-        for j in backup_sectorial_path_with_labels:
-            path_info = backup_sectorial_path_with_labels[j]
-            send_message = SC.make_task_assign_message(domainid=i, task_id=taskId, src_ip=srcIp, dst_ip=dstIp,
-                                                       bandwidth=bandwith, duration=duration,
-                                                       path_info=path_info, type='backup')
-            command = SC._to_commad(send_message)
+            print "main: ", command
             SC.send_no_return_command(command)
+            taskInstance.addMainUnconfirmDomain(i)
 
-        uncnfirm_domian_list = task_info.setdefault('unconfirm_domain_list', {})
-        uncnfirm_domian_list['main'] = main_sectorial_path.keys()
-        uncnfirm_domian_list['backup'] = backup_sectorial_path.keys()
-        task_info['create_time'] = time.time()
-        task_info[TASKSTATUS] = UNCONFIRMED
+        
 
-    def start_backup_hanlder(self, taskId):
+        for j in backupSectorialPath:
+            send_message = taskInstance.makeDoaminTaskAssign(j, type='backup')
 
-        SC = self.SuperController
-        to_send = {}
-        to_send[TYPE] = 'StartBackupHanlder'
-        to_send[DOMAINID] = taskId[DOMAINID]
-        to_send[REST_TASK_ID] = taskId['id']
-
-        send_message = json.dumps(to_send)
-        command = SC._to_commad(send_message)
-
-        SC.send_no_return_command(command)
+            command = SC._to_commad(send_message)
+            print "backup: ",command
+            SC.send_no_return_command(command)
+            taskInstance.addBackupUnconfirmDomain(j)
 
 
-    @route('super', super_url_base + '/task/delete', methods=['PUT'], requirements=None)
+    #####  dai  xiu gai
+    @route('super', SUPERBASEURL + '/task/delete', methods=['PUT'], requirements=None)
     def taskDelete(self, req):
         SC = self.SuperController
 
         rest = eval(req)
 
         try:
-            taskId = rest[REST_TASK_ID]
+            taskId = rest[TASK_ID]
         except:
             self.logger.debug("No task marked as taskId")
             return
@@ -328,80 +361,3 @@ class SuperWsgiController(ControllerBase):
         SC.task_del_info[taskId] = domainList
 
 
-    def assign_mpls_lable(self, sectorial_path, label_list):
-
-        for key in sectorial_path:
-            i = sectorial_path[key]
-            labels = []
-            sectorial_swtich_lists = i['list']
-            length = len(sectorial_swtich_lists)
-            for j in range(0, length-1):
-                label = label_list[0]
-                label_list.remove(label)
-                labels.append(label)
-            i['labels'] = labels
-
-        return sectorial_path
-
-    def get_sectorial_path(self, pathlist, dict):
-        length = len(pathlist)
-
-        path_dict = {}
-        for node in pathlist:
-            if node in dict:
-                node_domainId = dict[node]
-                part_path = path_dict.setdefault(node_domainId, {})
-                part_path_list = part_path.setdefault('list', [])
-                if node not in part_path_list:
-                    part_path_list.append(node)
-            else:
-                break
-
-        for i in path_dict:
-            part = path_dict[i]
-            first = part['list'][0]
-            last = part['list'][-1]
-            first_index = pathlist.index(first)
-            if first_index  == 0:
-                part['pre'] = 0
-            else:
-                part['pre'] = pathlist[first_index - 1]
-
-            last_index = pathlist.index(last)
-            if last_index == length - 1:
-                part['post'] = 0
-            else:
-                part['post'] = pathlist[last_index + 1]
-
-        return path_dict
-
-
-    def get_backward_info(self, path_info):
-
-        backward_info = path_info
-        backward_info['complete_path'].reverse()
-        backward_info[REST_SRC_SWITCH], backward_info[REST_DST_SWITCH] \
-            = backward_info[REST_DST_SWITCH], backward_info[REST_SRC_SWITCH]
-        backward_info[REST_SRC_IP] , backward_info[REST_DST_IP]  \
-            = backward_info[REST_DST_IP], backward_info[REST_SRC_IP]
-        for i in backward_info['sectorial_path']:
-            backward_info['sectorial_path']['labels'].reverse()
-            backward_info['sectorial_path']['list'].reverse()
-            backward_info['sectorial_path']['pre'], backward_info['sectorial_path']['post']=\
-                backward_info['sectorial_path']['post'], backward_info['sectorial_path']['pre']
-
-        return backward_info
-
-    def get_topo_for_backup(self, topo, edges):
-        tempTopo = copy.deepcopy(topo)
-        tempTopo.remove_edges_from(edges)
-
-        return tempTopo
-
-    def get_edges_from_switchlist(self, switchlist):
-        length = len(switchlist)
-        edges = []
-        for i in range(length - 1):
-            edges.append((switchlist[i], switchlist[i+1]))
-
-        return edges
